@@ -35,14 +35,53 @@ when "debian"
 
   dev_pkgs << "libicu-dev"
   dev_pkgs << "libcurl4-openssl-dev"
-  dev_pkgs << value_for_platform(
-    "debian" => { "default" => "libmozjs-dev" },
-    "ubuntu" => {
-      "9.04" => "libmozjs-dev",
-      "9.10" => "libmozjs-dev",
-      "default" => "xulrunner-dev"
-    }
-  )
+
+  if node['platform'] == "ubuntu" && node['platform_version'].to_f < 12.04 
+    dev_pkgs << value_for_platform(
+      "debian" => { "default" => "libmozjs-dev" },
+      "ubuntu" => {
+        "9.04" => "libmozjs-dev",
+        "9.10" => "libmozjs-dev",
+        "default" => "xulrunner-dev"
+      }
+    )
+  end
+
+  # get xulrunner for new Ubuntu versions
+  if node['platform'] == "ubuntu" && node['platform_version'].to_f >= 12.04
+    dev_pkgs << "libmozjs-dev"
+
+    bash "download xulrunner directly from mozilla" do
+      code <<-EOH
+        VER=1.9.2.8
+        ARCH=`uname -p`
+        XUL_URL=https://ftp.mozilla.org/pub/mozilla.org/xulrunner/releases/$VER
+        XUL_RUNTIME=$XUL_URL/runtimes/xulrunner-$VER.en-US.linux-$ARCH.tar.bz2
+        XUL_SDK=$XUL_URL/sdk/xulrunner-$VER.en-US.linux-$ARCH.sdk.tar.bz2
+
+        cd /opt
+        sudo sh -c "wget -O- $XUL_RUNTIME | tar -xj"
+        sudo sh -c "wget -O- $XUL_SDK | tar -xj"
+      EOH
+      not_if { ::FileTest.exists?("/opt/xulrunner/xulrunner") }
+    end
+
+    bash "link up xulrunner" do
+      code <<-EOH
+        VER=1.9.2.8
+        sudo ln -s /opt/xulrunner/xulrunner /usr/bin/xulrunner
+        sudo ln -s /opt/xulrunner/xpcshell /usr/bin/xpcshell
+        sudo ln -s /opt/xulrunner-sdk /usr/lib/xulrunner-devel-$VER
+        sudo ln -s /opt/xulrunner /usr/lib/xulrunner-$VER
+        cd /etc
+        mkdir ld.so.conf.d
+        cd ld.so.conf.d
+	echo "/usr/lib/xulrunner-$VER\n/usr/lib/xulrunner-devel-$VER" > xulrunner.conf
+        sudo /sbin/ldconfig
+      EOH
+      not_if { ::FileTest.exists?("/usr/bin/xulrunner") }
+    end
+  end
 
   dev_pkgs.each do |pkg|
     package pkg
@@ -80,6 +119,16 @@ end
     group "couchdb"
     mode "0770"
   end
+end
+
+template "/usr/local/etc/couchdb/local.ini" do
+  source "local.ini.erb"
+  owner "couchdb"
+  group "couchdb"
+  mode 0664
+  variables(
+    :bind_address => node['couch_db']['bind_address']
+  )
 end
 
 cookbook_file "/etc/init.d/couchdb" do
